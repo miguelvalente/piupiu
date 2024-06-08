@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -131,6 +132,30 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
+	if req.Method == http.MethodPost {
+		type parameters struct {
+			Email string `json:"email"`
+		}
+
+		decoder := json.NewDecoder(req.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			w = respondWithError(w, 500, "Something went wrong")
+			return
+		}
+
+		user, err := cfg.DB.CreateUser(params.Email)
+		fmt.Println(user)
+		if err != nil {
+			w = respondWithError(w, 500, "Something went wrong making chirps")
+			return
+		}
+		w = respondWithJSON(w, 201, user)
+	}
+}
+
 var badWords = []string{
 	"kerfuffle",
 	"sharbert",
@@ -157,6 +182,12 @@ func capitalizeFirstLetter(s string) string {
 func main() {
 	serverMux := http.NewServeMux()
 
+	err := os.Remove("database.json")
+	if err != nil && !os.IsNotExist(err) {
+		log.Printf("Failed to delete existing database file: %v", err)
+	} else {
+		log.Println("Existing database file deleted or not found.")
+	}
 	db_, _ := NewDB("database.json")
 	apiCfg := apiConfig{
 		fileserverHits: 0,
@@ -171,6 +202,7 @@ func main() {
 	serverMux.HandleFunc("/api/reset", apiCfg.handlerResets)
 	serverMux.HandleFunc("/api/chirps", apiCfg.handlerChirp)
 	serverMux.HandleFunc("/api/chirps/{chirpId}", apiCfg.handlerChirp)
+	serverMux.HandleFunc("/api/users", apiCfg.handlerUser)
 
 	server := http.Server{
 		Addr:    ":8080",
