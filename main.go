@@ -11,6 +11,7 @@ import (
 
 type apiConfig struct {
 	fileserverHits int
+	DB             DB
 }
 
 func handler(w http.ResponseWriter, req *http.Request) {
@@ -86,41 +87,35 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) http.
 	return w
 }
 
-type Chirp struct {
-	Id   int    `json:"id"`
-	Body string `json:"body"`
-}
-
-type ChirpStorage struct {
-	Chirps []Chirp
-}
-
 func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	type parameters struct {
-		Body string `json:"body"`
-	}
+	if req.Method == http.MethodPost {
+		type parameters struct {
+			Body string `json:"body"`
+		}
 
-	decoder := json.NewDecoder(req.Body)
-	params := parameters{}
-	err := decoder.Decode(&params)
-	if err != nil {
-		w = respondWithError(w, 500, "Something went wrong")
-		return
-	}
+		decoder := json.NewDecoder(req.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			w = respondWithError(w, 500, "Something went wrong")
+			return
+		}
 
-	if len(params.Body) > 140 {
-		w = respondWithError(w, 400, "Chirp is too long")
-		return
-	} else {
-		cleanedBody := cleanBody(params.Body)
-		w = respondWithJSON(w, 200, Chirp{
-			Id:   len(ChirpStorage.Chirps) + 1,
-			Body: cleanedBody,
-		})
+		if len(params.Body) > 140 {
+			w = respondWithError(w, 400, "Chirp is too long")
+			return
+		} else {
+			cleanedBody := cleanBody(params.Body)
+			chirp, err := cfg.DB.CreateChirp(cleanedBody)
+			if err != nil {
+				w = respondWithError(w, 500, "Something went wrong making chirps")
+				return
+			}
+			w = respondWithJSON(w, 201, chirp)
+		}
+	} else if req.Method == http.MethodGet {
+		chirps, _ := cfg.DB.GetChirps()
+		w = respondWithJSON(w, 200, chirps)
 	}
 }
 
@@ -149,7 +144,12 @@ func capitalizeFirstLetter(s string) string {
 
 func main() {
 	serverMux := http.NewServeMux()
-	apiCfg := new(apiConfig)
+
+	db_, _ := NewDB("database.json")
+	apiCfg := apiConfig{
+		fileserverHits: 0,
+		DB:             *db_,
+	}
 
 	serverMux.Handle("/app/*", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	serverMux.Handle("/assets", http.FileServer(http.Dir("assets/")))
@@ -157,7 +157,7 @@ func main() {
 	serverMux.HandleFunc("/api/metrics", apiCfg.handlerHits)
 	serverMux.HandleFunc("/admin/metrics", apiCfg.handlerAdmin)
 	serverMux.HandleFunc("/api/reset", apiCfg.handlerResets)
-	serverMux.HandleFunc("/api/chirp", apiCfg.handlerChirp)
+	serverMux.HandleFunc("/api/chirps", apiCfg.handlerChirp)
 
 	server := http.Server{
 		Addr:    ":8080",
