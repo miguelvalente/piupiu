@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -114,8 +115,19 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 			w = respondWithJSON(w, 201, chirp)
 		}
 	} else if req.Method == http.MethodGet {
-		chirps, _ := cfg.DB.GetChirps()
-		w = respondWithJSON(w, 200, chirps)
+
+		chirpId, err := strconv.Atoi(req.PathValue("chirpId"))
+		fmt.Println(chirpId, err)
+		if err != nil {
+			chirps, _ := cfg.DB.GetChirps()
+			w = respondWithJSON(w, 200, chirps)
+		} else {
+			chirp, err := cfg.DB.GetChirp(chirpId)
+			if err != nil {
+				w = respondWithError(w, 404, "Chirp Id does not exist")
+			}
+			w = respondWithJSON(w, 200, chirp)
+		}
 	}
 }
 
@@ -158,6 +170,7 @@ func main() {
 	serverMux.HandleFunc("/admin/metrics", apiCfg.handlerAdmin)
 	serverMux.HandleFunc("/api/reset", apiCfg.handlerResets)
 	serverMux.HandleFunc("/api/chirps", apiCfg.handlerChirp)
+	serverMux.HandleFunc("/api/chirps/{chirpId}", apiCfg.handlerChirp)
 
 	server := http.Server{
 		Addr:    ":8080",

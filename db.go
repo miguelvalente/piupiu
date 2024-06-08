@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
 	"os"
 	"sort"
@@ -41,8 +41,6 @@ func NewDB(path string) (*DB, error) {
 
 // CreateChirp creates a new chirp and saves it to disk
 func (db *DB) CreateChirp(body string) (Chirp, error) {
-	fmt.Println("Create")
-
 	err := db.ensureDB()
 	if err != nil {
 		return Chirp{}, err
@@ -71,7 +69,6 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 
 // // GetChirps returns all chirps in the database
 func (db *DB) GetChirps() ([]Chirp, error) {
-	fmt.Println("Get CHiprs")
 
 	err := db.ensureDB()
 	if err != nil {
@@ -82,10 +79,6 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	db.mux.RLock()
 	defer db.mux.RUnlock()
 
-	if err != nil {
-		return []Chirp{}, err
-	}
-
 	chirps := make([]Chirp, 0, len(dbStructure.Chirps))
 	for _, value := range dbStructure.Chirps {
 		chirps = append(chirps, value)
@@ -95,9 +88,26 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	return chirps, nil
 }
 
+func (db *DB) GetChirp(id int) (Chirp, error) {
+	err := db.ensureDB()
+	if err != nil {
+		return Chirp{}, err
+	}
+
+	dbStructure, err := db.loadDB()
+	db.mux.RLock()
+	defer db.mux.RUnlock()
+
+	chirp, exists := dbStructure.Chirps[id]
+	if exists {
+		return chirp, nil
+	} else {
+		return Chirp{}, errors.New("does not exist")
+	}
+}
+
 // // ensureDB creates a new database file if it doesn't exist
 func (db *DB) ensureDB() error {
-	fmt.Println("Ensure")
 	db.mux.Lock()
 	defer db.mux.Unlock()
 
@@ -116,8 +126,6 @@ func (db *DB) ensureDB() error {
 
 // loadDB reads the database file into memory
 func (db *DB) loadDB() (DBStructure, error) {
-	fmt.Println("LOAD")
-
 	err := db.ensureDB()
 	if err != nil {
 		return DBStructure{}, err
@@ -139,7 +147,6 @@ func (db *DB) loadDB() (DBStructure, error) {
 
 // // writeDB writes the database file to disk
 func (db *DB) writeDB(dbStructure DBStructure) error {
-	fmt.Println("WRITE")
 
 	err := db.ensureDB()
 	if err != nil {
