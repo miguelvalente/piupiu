@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type apiConfig struct {
@@ -135,7 +137,8 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodPost {
 		type parameters struct {
-			Email string `json:"email"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
 
 		decoder := json.NewDecoder(req.Body)
@@ -146,14 +149,59 @@ func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		user, err := cfg.DB.CreateUser(params.Email)
-		fmt.Println(user)
+		if cfg.DB.UserExists(params.Email) {
+			w = respondWithError(w, 403, "User already Exists")
+			return
+
+		}
+
+		hashed_password, err := hash(params.Password)
+		if err != nil {
+			w = respondWithError(w, 500, "Error hashing password")
+		}
+
+		user, err := cfg.DB.CreateUser(params.Email, hashed_password)
 		if err != nil {
 			w = respondWithError(w, 500, "Something went wrong making chirps")
 			return
 		}
 		w = respondWithJSON(w, 201, user)
 	}
+}
+
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
+	if req.Method == http.MethodPost {
+		type parameters struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+
+		decoder := json.NewDecoder(req.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			w = respondWithError(w, 500, "Something went wrong")
+			return
+		}
+
+		user, err := cfg.DB.GetUser(params.Email)
+		if err != nil {
+			w = respondWithError(w, 500, "User not found")
+		}
+		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(params.Password))
+		if err != nil {
+			w = respondWithJSON(w, 401, "Wrong credentials")
+		}
+		userOut := UserOut{
+			Id:    user.Id,
+			Email: user.Email,
+		}
+		w = respondWithJSON(w, 200, userOut)
+
+	} else {
+		w = respondWithJSON(w, 405, "Method not allowed")
+	}
+
 }
 
 var badWords = []string{
@@ -203,6 +251,7 @@ func main() {
 	serverMux.HandleFunc("/api/chirps", apiCfg.handlerChirp)
 	serverMux.HandleFunc("/api/chirps/{chirpId}", apiCfg.handlerChirp)
 	serverMux.HandleFunc("/api/users", apiCfg.handlerUser)
+	serverMux.HandleFunc("/api/login", apiCfg.handlerLogin)
 
 	server := http.Server{
 		Addr:    ":8080",
