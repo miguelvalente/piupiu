@@ -1,6 +1,8 @@
 package main
 
-import "errors"
+import (
+	"errors"
+)
 
 func (db *DB) CreateUser(email string, hashed_password string) (UserOut, error) {
 	err := db.ensureDB()
@@ -28,14 +30,41 @@ func (db *DB) CreateUser(email string, hashed_password string) (UserOut, error) 
 	err = db.writeDB(dbStructure)
 
 	userOut := UserOut{
-		Id:    newUser.Id,
+		Id:    userId,
 		Email: newUser.Email,
 	}
 
 	return userOut, err
 }
 
-func (db *DB) GetUser(email string) (User, error) {
+func (db *DB) UpdateUser(user_id int, email string, hashed_password string) (UserOut, error) {
+	err := db.ensureDB()
+	if err != nil {
+		return UserOut{}, err
+	}
+
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return UserOut{}, err
+	}
+
+	dbStructure.Users[user_id] = User{
+		Id:       user_id,
+		Email:    email,
+		Password: hashed_password,
+	}
+
+	err = db.writeDB(dbStructure)
+
+	userOut := UserOut{
+		Id:    user_id,
+		Email: email,
+	}
+
+	return userOut, nil
+}
+
+func (db *DB) GetUserByEmail(email string) (User, error) {
 	err := db.ensureDB()
 	if err != nil {
 		return User{}, err
@@ -55,7 +84,25 @@ func (db *DB) GetUser(email string) (User, error) {
 
 }
 
+func (db *DB) GetUserById(id int) (User, error) {
+	err := db.ensureDB()
+	if err != nil {
+		return User{}, err
+	}
+
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+	if user, exists := dbStructure.Users[id]; exists {
+		return user, nil
+	} else {
+		return User{}, errors.New("User email not found")
+	}
+
+}
+
 func (db *DB) UserExists(email string) bool {
-	_, err := db.GetUser(email)
+	_, err := db.GetUserByEmail(email)
 	return err == nil
 }

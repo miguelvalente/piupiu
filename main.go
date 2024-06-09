@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -120,7 +122,6 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 	} else if req.Method == http.MethodGet {
 
 		chirpId, err := strconv.Atoi(req.PathValue("chirpId"))
-		fmt.Println(chirpId, err)
 		if err != nil {
 			chirps, _ := cfg.DB.GetChirps()
 			w = respondWithJSON(w, 200, chirps)
@@ -165,8 +166,64 @@ func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
 			w = respondWithError(w, 500, "Something went wrong making chirps")
 			return
 		}
+
 		w = respondWithJSON(w, 201, user)
+	} else if req.Method == http.MethodPut {
+		tokenString := req.Header.Get("Authorization")
+		if tokenString == "" {
+			w = respondWithError(w, 500, "No Authorization Token")
+			return
+		}
+
+		jwtSecret := []byte(os.Getenv("JWT_SECRET"))
+
+		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+		token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+			return jwtSecret, nil
+		})
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		claims, ok := token.Claims.(*jwt.RegisteredClaims)
+		if !ok || !token.Valid {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		userId, err := strconv.Atoi(claims.Subject)
+		if err != nil {
+			w = respondWithError(w, 500, err.Error())
+		}
+
+		type parameters struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+
+		decoder := json.NewDecoder(req.Body)
+		params := parameters{}
+		err = decoder.Decode(&params)
+		if err != nil {
+			w = respondWithError(w, 500, "Something went wrong")
+			return
+		}
+
+		hashedPassword, err := hash(params.Password)
+		if err != nil {
+			w = respondWithError(w, 500, err.Error())
+		}
+
+		userOut, err := cfg.DB.UpdateUser(userId, params.Email, hashedPassword)
+		if err != nil {
+			w = respondWithError(w, 500, err.Error())
+		}
+
+		respondWithJSON(w, 200, userOut)
+
 	}
+
 }
 
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
@@ -174,6 +231,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
 		type parameters struct {
 			Email    string `json:"email"`
 			Password string `json:"password"`
+			Expires  int    `json:"expires_in_seconds,omitempty"`
 		}
 
 		decoder := json.NewDecoder(req.Body)
@@ -184,7 +242,8 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		user, err := cfg.DB.GetUser(params.Email)
+		user, err := cfg.DB.GetUserByEmail(params.Email)
+
 		if err != nil {
 			w = respondWithError(w, 500, "User not found")
 		}
@@ -192,9 +251,12 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
 		if err != nil {
 			w = respondWithJSON(w, 401, "Wrong credentials")
 		}
-		userOut := UserOut{
-			Id:    user.Id,
+
+		token := createJWT(user, params.Expires)
+
+		userOut := UserOutLogin{
 			Email: user.Email,
+			Token: token,
 		}
 		w = respondWithJSON(w, 200, userOut)
 
@@ -228,6 +290,7 @@ func capitalizeFirstLetter(s string) string {
 }
 
 func main() {
+	godotenv.Load()
 	serverMux := http.NewServeMux()
 
 	err := os.Remove("database.json")
