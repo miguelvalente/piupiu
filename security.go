@@ -8,14 +8,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func createJWT(user User, expire int) string {
+func createJWT(user User) string {
 	var expiresAt time.Time
+	expiresAt = time.Now().Add(1 * time.Hour)
 
-	if expire == 0 {
-		expiresAt = time.Now().Add(24 * time.Hour)
-	} else {
-		expiresAt = time.Now().Add(time.Duration(expire) * time.Second)
-	}
+	// if expire == 0 {
 	claims := jwt.RegisteredClaims{
 		Issuer:    "chirpy",
 		Subject:   fmt.Sprint(user.Id),

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -93,6 +95,29 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) http.
 	return w
 }
 
+var badWords = []string{
+	"kerfuffle",
+	"sharbert",
+	"fornax",
+}
+
+func cleanBody(s string) string {
+	for _, badWord := range badWords {
+		s = strings.ReplaceAll(s, badWord, "****")
+		s = strings.ReplaceAll(s, capitalizeFirstLetter(badWord), "****")
+
+	}
+	return s
+}
+func capitalizeFirstLetter(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	runes := []rune(s)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
+}
+
 func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodPost {
 		type parameters struct {
@@ -136,6 +161,7 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
+	// helperPrintHeaders(req)
 	if req.Method == http.MethodPost {
 		type parameters struct {
 			Email    string `json:"email"`
@@ -226,7 +252,20 @@ func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
 
 }
 
+func makeRefreshToken() (string, error) {
+	c := 128
+	b := make([]byte, c)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", nil
+	}
+
+	refreshToken := hex.EncodeToString(b)
+	return refreshToken, nil
+}
+
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
+	// helperPrintHeaders(req)
 	if req.Method == http.MethodPost {
 		type parameters struct {
 			Email    string `json:"email"`
@@ -252,11 +291,18 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
 			w = respondWithJSON(w, 401, "Wrong credentials")
 		}
 
-		token := createJWT(user, params.Expires)
+		token := createJWT(user)
+
+		refreshToken, err := makeRefreshToken()
+		if err != nil {
+			w = respondWithJSON(w, 401, err.Error())
+		}
+		cfg.DB.AddRefreshTokenToUser(user, refreshToken)
 
 		userOut := UserOutLogin{
-			Email: user.Email,
-			Token: token,
+			Email:        user.Email,
+			Token:        token,
+			RefreshToken: refreshToken,
 		}
 		w = respondWithJSON(w, 200, userOut)
 
@@ -266,27 +312,81 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
 
 }
 
-var badWords = []string{
-	"kerfuffle",
-	"sharbert",
-	"fornax",
+func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, req *http.Request) {
+	// helperPrintHeadersreq)
+
+	if req.Method == http.MethodPost {
+		tokenString := req.Header.Get("Authorization")
+		if tokenString == "" {
+			w = respondWithError(w, 500, "No Authorization Token")
+			return
+		}
+
+		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+
+		newToken, valid, err := cfg.DB.RefreshTokenValid(tokenString)
+		if err != nil {
+			w = respondWithError(w, 401, "Not  Authorized")
+			return
+		}
+
+		payload := map[string]interface{}{
+			"token": newToken,
+		}
+
+		if valid {
+			w = respondWithJSON(w, 200, payload)
+		} else {
+			w = respondWithError(w, 401, "Fuck you")
+
+		}
+
+	} else {
+		w = respondWithJSON(w, 405, "Method not allowed")
+	}
+
 }
 
-func cleanBody(s string) string {
-	for _, badWord := range badWords {
-		s = strings.ReplaceAll(s, badWord, "****")
-		s = strings.ReplaceAll(s, capitalizeFirstLetter(badWord), "****")
+func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, req *http.Request) {
+	if req.Method == http.MethodPost {
+		tokenString := req.Header.Get("Authorization")
+		if tokenString == "" {
+			w = respondWithError(w, 500, "No Authorization Token")
+			return
+		}
 
+		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+
+		_, valid, err := cfg.DB.RefreshTokenValid(tokenString)
+		if err != nil {
+			w = respondWithError(w, 401, "Not  Authorized")
+			return
+		}
+
+		if valid {
+			cfg.DB.RevokeToken(tokenString)
+			w.WriteHeader(204)
+			return
+		}
+
+	} else {
+		w = respondWithJSON(w, 405, "Method not allowed")
 	}
-	return s
+
 }
-func capitalizeFirstLetter(s string) string {
-	if len(s) == 0 {
-		return s
+func helperPrintHeaders(req *http.Request) {
+	// Print the method and endpoint
+	fmt.Printf("===========")
+	fmt.Printf("Method: %s\n", req.Method)
+	fmt.Printf("Endpoint: %s\n", req.URL.Path)
+
+	// Print all headers
+	for header, values := range req.Header {
+		for _, value := range values {
+			fmt.Printf("%s: %s\n", header, value)
+		}
 	}
-	runes := []rune(s)
-	runes[0] = unicode.ToUpper(runes[0])
-	return string(runes)
+	fmt.Printf("\n\n")
 }
 
 func main() {
@@ -315,6 +415,8 @@ func main() {
 	serverMux.HandleFunc("/api/chirps/{chirpId}", apiCfg.handlerChirp)
 	serverMux.HandleFunc("/api/users", apiCfg.handlerUser)
 	serverMux.HandleFunc("/api/login", apiCfg.handlerLogin)
+	serverMux.HandleFunc("/api/refresh", apiCfg.handlerRefresh)
+	serverMux.HandleFunc("/api/revoke", apiCfg.handlerRevoke)
 
 	server := http.Server{
 		Addr:    ":8080",
