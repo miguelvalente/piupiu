@@ -20,9 +20,10 @@ func (db *DB) CreateUser(email string, hashed_password string) (UserOut, error) 
 	userId := len(dbStructure.Users) + 1
 
 	newUser := User{
-		Id:       userId,
-		Email:    email,
-		Password: hashed_password,
+		Id:          userId,
+		IsChirpyRed: false,
+		Email:       email,
+		Password:    hashed_password,
 	}
 	if dbStructure.Users == nil {
 		dbStructure.Users = map[int]User{}
@@ -32,8 +33,9 @@ func (db *DB) CreateUser(email string, hashed_password string) (UserOut, error) 
 	err = db.writeDB(dbStructure)
 
 	userOut := UserOut{
-		Id:    userId,
-		Email: newUser.Email,
+		Id:          userId,
+		IsChirpyRed: newUser.IsChirpyRed,
+		Email:       newUser.Email,
 	}
 
 	return userOut, err
@@ -54,6 +56,7 @@ func (db *DB) UpdateUser(user_id int, email string, hashed_password string) (Use
 
 	dbStructure.Users[user_id] = User{
 		Id:             user_id,
+		IsChirpyRed:    userExisting.IsChirpyRed,
 		Email:          email,
 		Password:       hashed_password,
 		RefreshToken:   userExisting.RefreshToken,
@@ -63,8 +66,9 @@ func (db *DB) UpdateUser(user_id int, email string, hashed_password string) (Use
 	err = db.writeDB(dbStructure)
 
 	userOut := UserOut{
-		Id:    user_id,
-		Email: email,
+		Id:          user_id,
+		IsChirpyRed: userExisting.IsChirpyRed,
+		Email:       email,
 	}
 
 	return userOut, nil
@@ -189,6 +193,24 @@ func (db *DB) RevokeToken(token string) error {
 	dbStructure, err = db.loadDB()
 	// fmt.Println("after after")
 	// fmt.Println(dbStructure)
+
+	return nil
+}
+
+func (db *DB) UpgradeUser(userId int) error {
+	db.ensureDB()
+
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	user := dbStructure.Users[userId]
+	user.IsChirpyRed = true
+
+	dbStructure.Users[userId] = user
+
+	db.writeDB(dbStructure)
 
 	return nil
 }

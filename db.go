@@ -41,7 +41,7 @@ func NewDB(path string) (*DB, error) {
 }
 
 // CreateChirp creates a new chirp and saves it to disk
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(body string, authorId int) (Chirp, error) {
 	err := db.ensureDB()
 	if err != nil {
 		return Chirp{}, err
@@ -55,8 +55,9 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	chirpId := len(dbStructure.Chirps) + 1
 
 	newChirp := Chirp{
-		Id:   chirpId,
-		Body: cleanBody(body),
+		Id:       chirpId,
+		Body:     cleanBody(body),
+		AuthorId: authorId,
 	}
 	if dbStructure.Chirps == nil {
 		dbStructure.Chirps = map[int]Chirp{}
@@ -66,6 +67,24 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	err = db.writeDB(dbStructure)
 
 	return newChirp, err
+}
+
+func (db *DB) DeleteChirp(chirpId int, userId int) error {
+	err := db.ensureDB()
+	if err != nil {
+		return err
+	}
+
+	dbStructure, err := db.loadDB()
+
+	if dbStructure.Chirps[chirpId].AuthorId != userId {
+		return errors.New("Not authorized")
+	}
+
+	delete(dbStructure.Chirps, chirpId)
+	db.writeDB(dbStructure)
+
+	return nil
 }
 
 // // GetChirps returns all chirps in the database
@@ -89,6 +108,31 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	return chirps, nil
 }
 
+func (db *DB) GetUserChirps(userId int, sortMethod string) ([]Chirp, error) {
+
+	err := db.ensureDB()
+	if err != nil {
+		return []Chirp{}, err
+	}
+
+	dbStructure, err := db.loadDB()
+	db.mux.RLock()
+	defer db.mux.RUnlock()
+
+	chirps := make([]Chirp, 0, len(dbStructure.Chirps))
+	for _, value := range dbStructure.Chirps {
+		if value.AuthorId == userId {
+			chirps = append(chirps, value)
+		}
+	}
+
+	if sortMethod == "asc" {
+		sort.Slice(chirps, func(i, j int) bool { return chirps[i].Id > chirps[i].Id })
+	} else {
+		sort.Slice(chirps, func(i, j int) bool { return chirps[i].Id > chirps[i].Id })
+	}
+	return chirps, nil
+}
 func (db *DB) GetChirp(id int) (Chirp, error) {
 	err := db.ensureDB()
 	if err != nil {

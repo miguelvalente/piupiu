@@ -120,13 +120,23 @@ func capitalizeFirstLetter(s string) string {
 
 func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodPost {
+		subject, w := authenticateUser(w, req)
+
+		if subject == "" {
+			return
+		}
+		userId, err := strconv.Atoi(subject)
+		if err != nil {
+			w = respondWithError(w, 500, err.Error())
+		}
+
 		type parameters struct {
 			Body string `json:"body"`
 		}
 
 		decoder := json.NewDecoder(req.Body)
 		params := parameters{}
-		err := decoder.Decode(&params)
+		err = decoder.Decode(&params)
 		if err != nil {
 			w = respondWithError(w, 500, "Something went wrong")
 			return
@@ -137,7 +147,7 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 			return
 		} else {
 			cleanedBody := cleanBody(params.Body)
-			chirp, err := cfg.DB.CreateChirp(cleanedBody)
+			chirp, err := cfg.DB.CreateChirp(cleanedBody, userId)
 			if err != nil {
 				w = respondWithError(w, 500, "Something went wrong making chirps")
 				return
@@ -145,19 +155,93 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, req *http.Request) {
 			w = respondWithJSON(w, 201, chirp)
 		}
 	} else if req.Method == http.MethodGet {
+		s := req.URL.Query().Get("author_id")
+		if s == "" {
+			chirpId, err := strconv.Atoi(req.PathValue("chirpId"))
+			if err != nil {
+				chirps, _ := cfg.DB.GetChirps()
+				w = respondWithJSON(w, 200, chirps)
+				return
+			}
 
-		chirpId, err := strconv.Atoi(req.PathValue("chirpId"))
-		if err != nil {
-			chirps, _ := cfg.DB.GetChirps()
-			w = respondWithJSON(w, 200, chirps)
-		} else {
 			chirp, err := cfg.DB.GetChirp(chirpId)
 			if err != nil {
 				w = respondWithError(w, 404, "Chirp Id does not exist")
 			}
 			w = respondWithJSON(w, 200, chirp)
+
+		} else {
+			authorId, err := strconv.Atoi(s)
+			if err != nil {
+				w.WriteHeader(500)
+			}
+			sortMethod := req.URL.Query().Get("sort")
+			if sortMethod == "" {
+				sortMethod == "asc"
+			}
+
+			chirps, _ := cfg.DB.GetUserChirps(authorId, sortMethod)
+			w = respondWithJSON(w, 200, chirps)
+			return
+
 		}
+
+	} else if req.Method == http.MethodDelete {
+		subject, w := authenticateUser(w, req)
+
+		if subject == "" {
+			w.WriteHeader(204)
+			return
+		}
+
+		userId, err := strconv.Atoi(subject)
+		if err != nil {
+			w = respondWithError(w, 500, err.Error())
+		}
+
+		chirpId, err := strconv.Atoi(req.PathValue("chirpId"))
+		if err != nil {
+			chirps, _ := cfg.DB.GetChirps()
+			w = respondWithJSON(w, 200, chirps)
+			return
+		}
+
+		err = cfg.DB.DeleteChirp(chirpId, userId)
+		if err != nil {
+			w = respondWithError(w, 403, err.Error())
+		}
+
+		w.WriteHeader(204)
+
 	}
+}
+
+func authenticateUser(w http.ResponseWriter, req *http.Request) (string, http.ResponseWriter) {
+
+	tokenString := req.Header.Get("Authorization")
+	if tokenString == "" {
+		w = respondWithError(w, 500, "No Authorization Token")
+		return "", w
+	}
+
+	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
+
+	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return jwtSecret, nil
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return "", w
+	}
+
+	claims, ok := token.Claims.(*jwt.RegisteredClaims)
+	if !ok || !token.Valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		return "", w
+	}
+
+	return claims.Subject, w
 }
 
 func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
@@ -194,31 +278,14 @@ func (cfg *apiConfig) handlerUser(w http.ResponseWriter, req *http.Request) {
 		}
 
 		w = respondWithJSON(w, 201, user)
+
 	} else if req.Method == http.MethodPut {
-		tokenString := req.Header.Get("Authorization")
-		if tokenString == "" {
-			w = respondWithError(w, 500, "No Authorization Token")
+		subject, w := authenticateUser(w, req)
+		if subject == "" {
 			return
 		}
 
-		jwtSecret := []byte(os.Getenv("JWT_SECRET"))
-
-		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
-		token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-			return jwtSecret, nil
-		})
-		if err != nil {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		claims, ok := token.Claims.(*jwt.RegisteredClaims)
-		if !ok || !token.Valid {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		userId, err := strconv.Atoi(claims.Subject)
+		userId, err := strconv.Atoi(subject)
 		if err != nil {
 			w = respondWithError(w, 500, err.Error())
 		}
@@ -301,6 +368,8 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, req *http.Request) {
 
 		userOut := UserOutLogin{
 			Email:        user.Email,
+			UserId:       user.Id,
+			IsChirpyRed:  user.IsChirpyRed,
 			Token:        token,
 			RefreshToken: refreshToken,
 		}
@@ -374,6 +443,55 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, req *http.Request) {
 	}
 
 }
+
+func (cfg *apiConfig) handlerWebhook(w http.ResponseWriter, req *http.Request) {
+	apiKeyString := req.Header.Get("Authorization")
+	if apiKeyString == "" {
+		w.WriteHeader(401)
+		return
+	}
+
+	apiKeyString = strings.TrimPrefix(apiKeyString, "ApiKey ")
+	fmt.Println(apiKeyString)
+	key := string(os.Getenv("POLKA_KEY"))
+	if apiKeyString != key {
+		w.WriteHeader(401)
+		return
+	}
+
+	if req.Method == http.MethodPost {
+		type parameters struct {
+			Event string `json:"event"`
+			Data  struct {
+				UserId int `json:"user_id"`
+			} `json:"data"`
+		}
+
+		decoder := json.NewDecoder(req.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			w = respondWithError(w, 500, "Something went wrong")
+			return
+		}
+
+		if params.Event != "user.upgraded" {
+			w.WriteHeader(204)
+			return
+		}
+
+		_, err = cfg.DB.GetUserById(params.Data.UserId)
+		if err != nil {
+			w.WriteHeader(404)
+			return
+		}
+
+		cfg.DB.UpgradeUser(params.Data.UserId)
+		w.WriteHeader(204)
+
+	}
+}
+
 func helperPrintHeaders(req *http.Request) {
 	// Print the method and endpoint
 	fmt.Printf("===========")
@@ -417,6 +535,7 @@ func main() {
 	serverMux.HandleFunc("/api/login", apiCfg.handlerLogin)
 	serverMux.HandleFunc("/api/refresh", apiCfg.handlerRefresh)
 	serverMux.HandleFunc("/api/revoke", apiCfg.handlerRevoke)
+	serverMux.HandleFunc("/api/polka/webhooks", apiCfg.handlerWebhook)
 
 	server := http.Server{
 		Addr:    ":8080",
